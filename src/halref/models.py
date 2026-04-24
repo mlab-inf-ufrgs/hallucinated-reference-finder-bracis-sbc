@@ -34,6 +34,7 @@ class Reference(BaseModel):
     url: str = ""
     pages: str = ""
     source_index: int = 0
+    reference_number: int | None = None  # For numbered formats (e.g., SPLNCS [N])
     extraction_confidence: float = 0.0
 
     def first_author_last(self) -> str:

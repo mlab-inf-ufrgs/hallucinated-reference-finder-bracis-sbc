@@ -85,6 +85,47 @@ def get_field_parsers(config: Config) -> list[FieldParser]:
     return parsers
 
 
+def get_style_specific_parsers(style: str | None = None) -> list[FieldParser]:
+    """Get field parsers specific to a bibliography style.
+
+    Args:
+        style: Style name ("acl", "sbc", "splncs") or None for auto-detection.
+
+    Returns:
+        List of parsers appropriate for the style.
+    """
+    from halref.extract.field_parsers.style_specific_parsers import (
+        ACLFieldParser,
+        SBCFieldParser,
+        SPLNCSFieldParser,
+    )
+
+    if style == "acl":
+        return [ACLFieldParser()]
+    elif style == "sbc":
+        return [SBCFieldParser()]
+    elif style == "splncs":
+        return [SPLNCSFieldParser()]
+    else:
+        # Return all style-specific parsers for auto-detection
+        return [ACLFieldParser(), SBCFieldParser(), SPLNCSFieldParser()]
+
+
+def _detect_reference_style(references: list[str]) -> str:
+    """Detect the bibliography style from a batch of reference strings.
+
+    Args:
+        references: List of reference strings.
+
+    Returns:
+        Style name ("acl", "sbc", "splncs") or "unknown".
+    """
+    from halref.extract.field_parsers.style_detector import StyleDetector
+
+    detected_style = StyleDetector.detect_style_from_batch(references)
+    return detected_style.value
+
+
 def extract_references(pdf_path: Path, config: Config) -> list[Reference]:
     """Extract references from a PDF using the multi-pronged ensemble.
 
@@ -152,11 +193,19 @@ def extract_references(pdf_path: Path, config: Config) -> list[Reference]:
     ref_strings = all_ref_strings[best_extractor]
     logger.info(f"Using {best_extractor} extraction ({len(ref_strings)} references)")
 
+    # Detect bibliography style from reference strings
+    detected_style = _detect_reference_style(ref_strings)
+    logger.info(f"Detected bibliography style: {detected_style}")
+
+    # Get style-specific parsers for better accuracy
+    style_parsers = get_style_specific_parsers(detected_style)
+    all_parsers = style_parsers + parsers
+
     # Layer 2: Parse each reference string
     references = []
     filtered_count = 0
     for i, raw_text in enumerate(ref_strings):
-        ref = _parse_with_ensemble(raw_text, parsers)
+        ref = _parse_with_ensemble(raw_text, all_parsers)
         ref.source_index = i + 1
 
         # Filter out low-confidence non-references
