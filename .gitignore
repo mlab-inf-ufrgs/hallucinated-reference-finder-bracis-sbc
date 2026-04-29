@@ -15,7 +15,11 @@ build/
 
 # Output directories (generated at runtime)
 halref_output/
+halref_experiment_out/
+halref_single_report/
+results/
 /output/
+extraction_diagnostic.json
 
 # Downloaded test data (large, reproducible via scripts)
 test_arxiv/
@@ -36,6 +40,9 @@ tests/fixtures/acl_natbib.bst
 
 # Papers data (private)
 papers/
+
+# Local PDF tests (add samples yourself)
+pdf-inputs/*.pdf
 
 # Editor
 *.swp

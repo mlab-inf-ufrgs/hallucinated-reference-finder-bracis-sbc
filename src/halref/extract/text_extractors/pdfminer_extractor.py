@@ -7,45 +7,9 @@ import re
 from pathlib import Path
 
 from halref.extract.base import TextExtractor
+from halref.extract.ref_section import REF_HEADING, slice_reference_body
 
 logger = logging.getLogger(__name__)
-
-# Patterns that signal the end of the references section.
-# Must handle various appendix heading formats:
-#   "Appendix", "A Appendix", "8 Appendix", "A.1 Details",
-#   "A Illustrating Narrative", "Limitations", "Ethics Statement"
-_STOP_PATTERNS = re.compile(
-    r"\n\s*(?:"
-    # Direct appendix keywords
-    r"Appendix|Appendices|Supplementary|Supplemental|Checklist"
-    # "A Title" or "B Title" (single letter section = appendix)
-    r"|[A-H]\s+[A-Z][a-z]"
-    # "8 Appendix" or "9 Supplementary" (numbered appendix)
-    r"|\d+\s+(?:Appendix|Supplementary|Additional)"
-    # "A.1 Details" or "B.2 Examples"
-    r"|[A-H]\.\d+\s+[A-Z]"
-    # Post-references sections
-    r"|Acknowledgment|Acknowledgement"
-    r"|Ethics\s+Statement|Limitations"
-    r"|Broader\s+Impact|Impact\s+Statement"
-    # Additional appendix indicators
-    r"|Additional\s+(?:Experiments|Details|Results|Analysis|Examples)"
-    r"|Supplementary\s+Material"
-    r"|Reproducibility"
-    # Appendix content markers (figures/tables as standalone headings)
-    r"|(?:Figure|Table)\s+\d+\s*:"
-    # Common appendix headings
-    r"|Prompt\s+Template|Evaluation\s+(?:Form|Rubric|Criteria)"
-    r"|Implementation\s+Details|Hyperparameter"
-    r"|Dataset\s+(?:Details|Statistics|Description)"
-    r")\b",
-    re.IGNORECASE,
-)
-
-# Patterns that match a References/Bibliography heading
-_REF_HEADING = re.compile(
-    r"(?:^|\n)\s*(?:References|REFERENCES|Bibliography|BIBLIOGRAPHY)\s*\n",
-)
 
 
 class PdfminerExtractor(TextExtractor):
@@ -72,7 +36,7 @@ class PdfminerExtractor(TextExtractor):
             text = self._extract_auto(pdf_path)
 
         text = self._strip_line_numbers(text)
-        return self._find_references_section(text)
+        return slice_reference_body(text)
 
     @staticmethod
     def _strip_line_numbers(text: str) -> str:
@@ -102,7 +66,7 @@ class PdfminerExtractor(TextExtractor):
         for page_num in range(total_pages - 1, -1, -1):
             text = extract_text(str(pdf_path), page_numbers=[page_num])
             text = self._strip_line_numbers(text)
-            if _REF_HEADING.search(text):
+            if REF_HEADING.search(text):
                 ref_page = page_num
                 break
 
@@ -129,17 +93,3 @@ class PdfminerExtractor(TextExtractor):
             f"extracting pages {ref_page + 1}-{total_pages}"
         )
         return extract_text(str(pdf_path), page_numbers=pages)
-
-    def _find_references_section(self, text: str) -> str:
-        """Extract text between References heading and next section."""
-        match = _REF_HEADING.search(text)
-        if match:
-            after = text[match.end():]
-            # Stop at appendix, acknowledgments, etc.
-            stop = _STOP_PATTERNS.search(after)
-            if stop:
-                after = after[:stop.start()]
-            return after.strip()
-
-        # No heading found — return all text (user specified page range)
-        return text.strip()

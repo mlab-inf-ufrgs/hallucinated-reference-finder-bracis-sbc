@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from pathlib import Path
 
 import pdfplumber
 
 from halref.extract.base import TextExtractor
+from halref.extract.ref_section import REF_HEADING, slice_reference_body
+
+logger = logging.getLogger(__name__)
 
 
 class PdfplumberExtractor(TextExtractor):
@@ -38,40 +42,22 @@ class PdfplumberExtractor(TextExtractor):
                 if text:
                     all_page_texts.append(text)
 
-        # Strategy: For each page, try to find the References heading.
-        # Once found, take everything from that point onward across all pages.
-        ref_text_parts = []
-        found_heading = False
-
-        for page_text in all_page_texts:
-            if not found_heading:
-                ref_match = re.search(
-                    r"(?:^|\n)\s*References\s*\n",
-                    page_text,
-                    re.IGNORECASE,
-                )
-                if ref_match:
-                    found_heading = True
-                    ref_text_parts.append(page_text[ref_match.end():].strip())
-                # Also check if the page is mostly references (no heading but
-                # looks like reference content - starts with author names)
-                elif self._looks_like_references(page_text):
-                    ref_text_parts.append(page_text.strip())
-            else:
-                ref_text_parts.append(page_text.strip())
-
-        if ref_text_parts:
-            return "\n\n".join(ref_text_parts)
-
-        # Fallback: return all text (trust the user's page range)
-        return "\n\n".join(all_page_texts)
+        combined = "\n\n".join(all_page_texts)
+        combined = self._strip_line_numbers(combined)
+        return slice_reference_body(combined)
 
     def _looks_like_references(self, text: str) -> bool:
         """Heuristic: does this text look like it's mostly references?"""
-        # Count how many year patterns (19xx or 20xx) appear
         years = re.findall(r"\b(?:19|20)\d{2}\b", text)
-        # If there are multiple years and names, it's likely references
+        years += re.findall(r"\((?:19|20)\d{2}\)", text)
         return len(years) >= 3
+
+    @staticmethod
+    def _strip_line_numbers(text: str) -> str:
+        """Remove line-number-only lines (review-mode PDFs)."""
+        lines = text.split("\n")
+        filtered = [line for line in lines if not re.match(r"^\s*\d{1,4}\s*$", line)]
+        return "\n".join(filtered)
 
     def _extract_page_columns(self, page) -> str:
         """Extract text from a page, handling two-column layout.
@@ -96,54 +82,36 @@ class PdfplumberExtractor(TextExtractor):
         return left_text + "\n\n" + right_text
 
     def _extract_auto(self, pdf_path: Path) -> str:
-        """Auto-detect reference section by scanning for heading.
-
-        Scans pages from the end backwards looking for the References heading.
-        For ACL papers, references are typically in the last 1-3 pages.
-        """
+        """Scan backwards from the last page for a bibliography heading (same idea as pdfminer)."""
         with pdfplumber.open(pdf_path) as pdf:
-            # Scan from the end to find references start
-            all_text = []
-            found_refs = False
+            total = len(pdf.pages)
+            ref_page: int | None = None
+            for i in range(total - 1, -1, -1):
+                text = self._extract_page_columns(pdf.pages[i])
+                text = self._strip_line_numbers(text)
+                if text and REF_HEADING.search(text):
+                    ref_page = i
+                    break
 
-            # Check last 5 pages (references rarely span more)
-            start_page = max(0, len(pdf.pages) - 5)
-            for i in range(start_page, len(pdf.pages)):
-                page = pdf.pages[i]
-                text = self._extract_page_columns(page)
-                if not text:
-                    continue
+            if ref_page is None:
+                logger.warning("No References/Referências heading found (pdfplumber)")
+                start = max(0, total - 3)
+                parts: list[str] = []
+                for j in range(start, total):
+                    t = self._extract_page_columns(pdf.pages[j])
+                    if t:
+                        parts.append(t)
+                combined = "\n\n".join(parts)
+                return slice_reference_body(self._strip_line_numbers(combined))
 
-                if not found_refs:
-                    # Look for "References" as a standalone heading
-                    ref_match = re.search(
-                        r"(?:^|\n)\s*References\s*\n",
-                        text,
-                        re.IGNORECASE,
-                    )
-                    if ref_match:
-                        found_refs = True
-                        all_text.append(text[ref_match.end():].strip())
-                else:
-                    # Check for appendix
-                    appendix_match = re.match(
-                        r"\s*(?:Appendix|Appendices|Supplementary)\b",
-                        text.strip(),
-                        re.IGNORECASE,
-                    )
-                    if appendix_match:
-                        break
-                    all_text.append(text)
-
-            return "\n\n".join(all_text)
+            parts = []
+            for j in range(ref_page, total):
+                t = self._extract_page_columns(pdf.pages[j])
+                if t:
+                    parts.append(t)
+            combined = "\n\n".join(parts)
+            return slice_reference_body(self._strip_line_numbers(combined))
 
     def _extract_refs_from_text(self, text: str) -> str:
-        """If the text contains a References heading, return only the text after it."""
-        ref_match = re.search(
-            r"(?:^|\n)\s*References\s*\n",
-            text,
-            re.IGNORECASE,
-        )
-        if ref_match:
-            return text[ref_match.end():].strip()
-        return text
+        """If the text contains a bibliography heading, return only the body after it."""
+        return slice_reference_body(text)

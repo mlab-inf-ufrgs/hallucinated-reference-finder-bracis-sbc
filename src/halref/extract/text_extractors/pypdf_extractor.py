@@ -7,33 +7,9 @@ import re
 from pathlib import Path
 
 from halref.extract.base import TextExtractor
+from halref.extract.ref_section import REF_HEADING, slice_reference_body
 
 logger = logging.getLogger(__name__)
-
-# Reuse patterns from pdfminer extractor
-_STOP_PATTERNS = re.compile(
-    r"\n\s*(?:"
-    r"Appendix|Appendices|Supplementary|Supplemental|Checklist"
-    r"|[A-H]\s+[A-Z][a-z]"
-    r"|\d+\s+(?:Appendix|Supplementary|Additional)"
-    r"|[A-H]\.\d+\s+[A-Z]"
-    r"|Acknowledgment|Acknowledgement"
-    r"|Ethics\s+Statement|Limitations"
-    r"|Broader\s+Impact|Impact\s+Statement"
-    r"|Additional\s+(?:Experiments|Details|Results|Analysis|Examples)"
-    r"|Supplementary\s+Material"
-    r"|Reproducibility"
-    r"|(?:Figure|Table)\s+\d+\s*:"
-    r"|Prompt\s+Template|Evaluation\s+(?:Form|Rubric|Criteria)"
-    r"|Implementation\s+Details|Hyperparameter"
-    r"|Dataset\s+(?:Details|Statistics|Description)"
-    r")\b",
-    re.IGNORECASE,
-)
-
-_REF_HEADING = re.compile(
-    r"(?:^|\n)\s*(?:References|REFERENCES|Bibliography|BIBLIOGRAPHY)\s*\n",
-)
 
 
 class PypdfExtractor(TextExtractor):
@@ -61,7 +37,7 @@ class PypdfExtractor(TextExtractor):
 
         full_text = "\n\n".join(texts)
         full_text = self._strip_line_numbers(full_text)
-        return self._find_references_section(full_text)
+        return slice_reference_body(full_text)
 
     def _extract_auto(self, reader) -> list[str]:
         """Scan pages backwards to find References, extract from there."""
@@ -71,7 +47,7 @@ class PypdfExtractor(TextExtractor):
         for i in range(total - 1, -1, -1):
             text = reader.pages[i].extract_text() or ""
             text = self._strip_line_numbers(text)
-            if _REF_HEADING.search(text):
+            if REF_HEADING.search(text):
                 ref_page = i
                 break
 
@@ -89,15 +65,3 @@ class PypdfExtractor(TextExtractor):
         lines = text.split("\n")
         filtered = [line for line in lines if not re.match(r"^\s*\d{1,4}\s*$", line)]
         return "\n".join(filtered)
-
-    def _find_references_section(self, text: str) -> str:
-        """Extract text between References heading and next section."""
-        match = _REF_HEADING.search(text)
-        if match:
-            after = text[match.end():]
-            stop = _STOP_PATTERNS.search(after)
-            if stop:
-                after = after[:stop.start()]
-            return after.strip()
-
-        return text.strip()

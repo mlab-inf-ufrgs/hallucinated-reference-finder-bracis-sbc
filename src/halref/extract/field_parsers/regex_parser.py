@@ -7,6 +7,7 @@ import re
 from nameparser import HumanName
 
 from halref.extract.base import FieldParser
+from halref.extract.field_parsers.text_after_year import strip_leading_after_year
 from halref.models import Author, Reference
 
 
@@ -73,7 +74,7 @@ class RegexFieldParser(FieldParser):
             ref.authors = self._parse_authors(authors_text)
 
             # Everything after year is title + venue
-            after_year = text[year_match.end():].strip().lstrip(".")
+            after_year = strip_leading_after_year(text[year_match.end() :])
             ref.title, ref.venue, ref.pages = self._parse_title_venue(after_year)
         else:
             # No year found — try to at least get a title

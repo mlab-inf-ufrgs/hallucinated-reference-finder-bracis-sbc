@@ -40,6 +40,22 @@ def test_sbc_parsing():
     assert "bracis" in (ref.venue or "").lower()
 
 
+def test_sbc_parenthesized_year_title_and_multi_author() -> None:
+    """Vancouver / APA-style ``(YYYY). Title`` and comma-separated authors."""
+    parser = SBCFieldParser()
+    raw = (
+        "Ahmad, W., Chowdhury, M. S. et al. (2021). Comparative analysis of machine learning. "
+        "In: Case Studies in Chemical Engineering, 4:100121."
+    )
+    ref = parser.parse(raw)
+    assert ref.year == 2021
+    assert not (ref.title or "").startswith(").")
+    assert "Comparative analysis" in (ref.title or "")
+    assert len(ref.authors) >= 2
+    assert any(a.last == "Ahmad" for a in ref.authors)
+    assert any(a.last == "Chowdhury" for a in ref.authors)
+
+
 def test_bracis_parsing():
     """Test BRACIS-format parsing."""
     parser = BRACISFieldParser()

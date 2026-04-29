@@ -38,6 +38,13 @@ def check(
     llm_model: Annotated[Optional[str], typer.Option("--llm-model", help="LLM model name")] = None,
     threshold: Annotated[float, typer.Option("--threshold", "-t", help="Hallucination score threshold for flagging")] = 0.5,
     show_ok: Annotated[bool, typer.Option("--show-ok", help="Show all references including verified OK ones")] = False,
+    risk_reports: Annotated[
+        bool,
+        typer.Option(
+            "--risk-reports",
+            help="Write risk_summary.md/csv and reports/detail_<id>.md per article",
+        ),
+    ] = False,
 ) -> None:
     """Check PDF(s) for hallucinated references.
 
@@ -47,6 +54,7 @@ def check(
       - Per-PDF .bib files with extracted references
       - report.json with full verification results
       - report_annotated.bib with hallucination scores
+      - With ``--risk-reports``: risk_summary.md, risk_summary.csv, reports/detail_<id>.md
       - Terminal report printed to stdout
     """
     from halref.config import load_config
@@ -133,6 +141,17 @@ def check(
         write_json_report(report, json_path)
         console.print(f"Wrote {json_path.resolve()}", style="dim")
 
+    if risk_reports:
+        from halref.output.risk_reports import write_batch_risk_reports
+
+        write_batch_risk_reports(report, outdir, cfg.matching.weights)
+        console.print(
+            f"Wrote {outdir.resolve() / 'risk_summary.md'}, "
+            f"{outdir.resolve() / 'risk_summary.csv'}, "
+            f"and {outdir.resolve() / 'reports' / 'detail_*.md'}",
+            style="dim",
+        )
+
     if write_bib_annotated:
         bib_report_path = outdir / "report_annotated.bib"
         write_bib_report(report, bib_report_path)
@@ -158,6 +177,13 @@ def check_bib(
     llm_model: Annotated[Optional[str], typer.Option("--llm-model", help="LLM model name")] = None,
     threshold: Annotated[float, typer.Option("--threshold", "-t", help="Hallucination score threshold for flagging")] = 0.5,
     show_ok: Annotated[bool, typer.Option("--show-ok", help="Show all references including verified OK ones")] = False,
+    risk_reports: Annotated[
+        bool,
+        typer.Option(
+            "--risk-reports",
+            help="Write risk_summary.md/csv and reports/detail_<id>.md per article",
+        ),
+    ] = False,
 ) -> None:
     """Check pre-existing .bib file(s) for hallucinated references.
 
@@ -235,6 +261,17 @@ def check_bib(
         json_path = outdir / "report.json"
         write_json_report(report, json_path)
         console.print(f"Wrote {json_path.resolve()}", style="dim")
+
+    if risk_reports:
+        from halref.output.risk_reports import write_batch_risk_reports
+
+        write_batch_risk_reports(report, outdir, cfg.matching.weights)
+        console.print(
+            f"Wrote {outdir.resolve() / 'risk_summary.md'}, "
+            f"{outdir.resolve() / 'risk_summary.csv'}, "
+            f"and {outdir.resolve() / 'reports' / 'detail_*.md'}",
+            style="dim",
+        )
 
     if write_bib_annotated:
         bib_report_path = outdir / "report_annotated.bib"

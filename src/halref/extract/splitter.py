@@ -21,6 +21,7 @@ def split_references(text: str) -> list[str]:
         "blank_lines": _split_by_blank_lines(text),
         "author_year": _split_by_author_year_pattern(text),
         "numbers": _split_by_numbers(text),
+        "numbered_lines": _split_by_line_leading_brackets(text),
     }
 
     # Pick the best strategy by quality score
@@ -74,12 +75,20 @@ def _quality_score(refs: list[str]) -> float:
     author_count = 0
 
     for ref in refs:
-        # Has a publication year?
-        if re.search(r"\b(?:19|20)\d{2}\b", ref):
+        body = re.sub(r"^\s*\[\d+\]\s*", "", ref)
+
+        # Has a publication year? (plain 2023 or LNCS-style (2023))
+        if re.search(r"\b(?:19|20)\d{2}\b", ref) or re.search(
+            r"\((?:19|20)\d{2}\)", ref
+        ):
             year_count += 1
 
+        # Numbered bibliography (Springer LNCS / many BRACIS templates)
+        if re.match(r"^\s*\[\d+\]", ref):
+            score += 2.5
+
         # Has author-like patterns? (capitalized names with commas/and)
-        if re.search(r"[A-Z][a-z]+.*(?:,|and)\s+[A-Z][a-z]+", ref):
+        if re.search(r"[A-Z][a-z]+.*(?:,|and)\s+[A-Z][a-z]+", body):
             author_count += 1
 
         # Reasonable length?
@@ -180,7 +189,9 @@ def _split_by_author_year_pattern(text: str) -> list[str]:
         block = re.sub(r"  +", " ", block).strip()
         if len(block) < 30:
             continue
-        if re.search(r"\b(?:19|20)\d{2}\b", block):
+        if re.search(r"\b(?:19|20)\d{2}\b", block) or re.search(
+            r"\((?:19|20)\d{2}\)", block
+        ):
             refs.append(block)
 
     return refs
@@ -191,54 +202,61 @@ def _is_reference_start(line: str) -> bool:
 
     A reference typically starts with:
     - A capitalized name (first or last) followed by more text
+    - A numbered marker [N] (LNCS / BRACIS)
     - NOT a continuation word like "In", "Proceedings", "pages", etc.
     """
-    # Must start with uppercase letter
-    if not line or not line[0].isupper():
+    stripped = line.strip()
+    if re.match(r"^\[\d+\]\s*\S", stripped):
+        return True
+
+    if not stripped or not stripped[0].isupper():
         return False
 
-    # Exclude common continuation patterns
     continuation_starts = (
-        "In ", "In\xa0", "Proceedings", "Journal", "Transactions",
+        "In ", "In:", "In\xa0", "Proceedings", "Journal", "Transactions",
         "Association", "Conference", "Annual", "Pages", "Volume",
         "Technical", "Chapter",
     )
-    if line.startswith(continuation_starts):
+    if stripped.startswith(continuation_starts):
         return False
 
-    # Should look like a name: capitalized word followed by more content
-    # and should contain a comma within first 60 chars (author list)
-    # or look like "Firstname Lastname" pattern
     name_pattern = re.match(
         r"^[A-Z\u00C0-\u024F][a-z\u00C0-\u024F]+[\s,]",
-        line,
+        stripped,
     )
     if not name_pattern:
         return False
 
-    # Should have a comma in the first 80 chars (typical of author lists)
-    # or be "Firstname Lastname." pattern
-    head = line[:80]
+    head = stripped[:80]
     if "," in head:
         return True
-    if re.match(r"^[A-Z][a-z]+ [A-Z][a-z]+", line):
+    if re.match(r"^[A-Z][a-z]+ [A-Z][a-z]+", stripped):
         return True
 
     return False
 
 
 def _split_by_numbers(text: str) -> list[str]:
-    """Split by numbered reference markers like [1], [2], etc."""
-    # Find [N] patterns anywhere in text (not just line starts)
+    """Split by numbered reference markers like [1], [2], etc.
+
+    Each chunk includes its leading ``[N]`` so style detectors and BRACIS
+    parsers see the marker (the first reference is not stripped of ``[1]``).
+    """
     pattern = re.compile(r"\[(\d+)\]\s*")
     matches = list(pattern.finditer(text))
 
-    if len(matches) < 2:
+    if not matches:
         return []
+
+    if len(matches) == 1:
+        chunk = text[matches[0].start() :].strip()
+        chunk = re.sub(r"\n", " ", chunk)
+        chunk = re.sub(r"  +", " ", chunk)
+        return [chunk] if len(chunk) > 20 else []
 
     refs = []
     for i, m in enumerate(matches):
-        start = m.end()
+        start = m.start()
         end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
         chunk = text[start:end].strip()
         if chunk and len(chunk) > 20:
@@ -246,6 +264,29 @@ def _split_by_numbers(text: str) -> list[str]:
             chunk = re.sub(r"  +", " ", chunk)
             refs.append(chunk.strip())
 
+    return refs
+
+
+def _split_by_line_leading_brackets(text: str) -> list[str]:
+    """Split when each reference begins at line start with ``[N]`` (LNCS / SPLNCS).
+
+    Stricter than :func:`_split_by_numbers` — ignores ``[N]`` that appear only
+    mid-line (e.g. in a title), which reduces garbage splits.
+    """
+    pattern = re.compile(r"(?:^|\n)\s*(\[\d+\])\s*", re.MULTILINE)
+    matches = list(pattern.finditer(text))
+    if len(matches) < 2:
+        return []
+
+    refs: list[str] = []
+    for i, m in enumerate(matches):
+        start = m.start(1)
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
+        chunk = text[start:end].strip()
+        if len(chunk) > 20:
+            chunk = re.sub(r"\n", " ", chunk)
+            chunk = re.sub(r"  +", " ", chunk)
+            refs.append(chunk)
     return refs
 
 

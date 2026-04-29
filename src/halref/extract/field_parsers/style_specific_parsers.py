@@ -7,6 +7,7 @@ import re
 from nameparser import HumanName
 
 from halref.extract.base import FieldParser
+from halref.extract.field_parsers.text_after_year import strip_leading_after_year
 from halref.models import Author, Reference
 
 
@@ -21,9 +22,10 @@ class NatbibFieldParser(FieldParser):
 
     YEAR_PATTERN = re.compile(r"\b((?:19|20)\d{2})[a-z]?\b")
     VENUE_PATTERN = re.compile(
-        r"\b[Ii]n\s+"
+        r"\b[Ii]n:?\s+"
         r"(Proceedings\s+of\s+.*?"
         r"|Advances\s+in\s+.*?"
+        r"|Anais\s+do\s+.*?"
         r"|Transactions\s+of\s+.*?"
         r"|(?:the\s+)?(?:\d+(?:st|nd|rd|th)\s+)?"
         r"[A-Z].*?)"
@@ -65,13 +67,18 @@ class NatbibFieldParser(FieldParser):
         # Extract title (between year and "In" or end)
         title_start = text.find(". ") + 2 if ". " in text else 0
         if year_match:
-            title_start = year_match.end()
-            if text[title_start:title_start + 2] == ". ":
+            tail = text[year_match.end() :]
+            stripped = strip_leading_after_year(tail)
+            title_start = year_match.end() + (len(tail) - len(stripped))
+            if title_start < len(text) and text[title_start : title_start + 2] == ". ":
                 title_start += 2
 
-        title_end = text.find(" In ", title_start) if " In " in text[title_start:] else len(text)
-        if title_end == -1:
-            title_end = len(text)
+        title_end = len(text)
+        tail = text[title_start:]
+        for sep in (" In: ", " In ", "\nIn: ", "\nIn "):
+            rel = tail.find(sep)
+            if rel != -1:
+                title_end = min(title_end, title_start + rel)
 
         if title_start < title_end:
             title = text[title_start:title_end].strip()
@@ -91,8 +98,22 @@ class NatbibFieldParser(FieldParser):
         if not author_text:
             return authors
 
-        # Split by "and" or "&"
-        author_parts = re.split(r"\s+(?:and|&)\s+", author_text)
+        author_text = author_text.strip().rstrip("(").strip()
+        author_text = re.sub(r",\s*et\s+al\.?$", "", author_text, flags=re.IGNORECASE).strip()
+        author_text = re.sub(r"\s+et\s+al\.?$", "", author_text, flags=re.IGNORECASE).strip()
+        if not author_text:
+            return authors
+
+        author_parts: list[str] = []
+        for seg in re.split(r"\s+(?:and|&)\s+", author_text):
+            seg = seg.strip().strip(",").strip()
+            if not seg:
+                continue
+            paired = self._pair_surname_comma_initials(seg)
+            if paired:
+                author_parts.extend(paired)
+            else:
+                author_parts.append(seg)
 
         for part in author_parts:
             part = part.strip()
@@ -118,6 +139,24 @@ class NatbibFieldParser(FieldParser):
                 authors.append(Author(last=last_name, first=first_name))
 
         return authors
+
+    @staticmethod
+    def _pair_surname_comma_initials(seg: str) -> list[str] | None:
+        """Split ``Surname, X., Surname2, Y.`` into separate author strings.
+
+        Returns None if the segment does not look like a comma-separated
+        surname/initial list (avoids breaking corporate names).
+        """
+        chunks = [c.strip() for c in re.split(r",\s+", seg) if c.strip()]
+        if len(chunks) < 2 or len(chunks) % 2 != 0:
+            return None
+        for i in range(1, len(chunks), 2):
+            ini = chunks[i]
+            if len(ini) > 16:
+                return None
+            if " " in ini and not re.match(r"^[A-Z]\.(\s+[A-Z]\.)*$", ini):
+                return None
+        return [f"{chunks[j]}, {chunks[j + 1]}" for j in range(0, len(chunks), 2)]
 
     def parse_confidence(self, ref: Reference) -> float:
         """Score parse confidence for natbib format."""

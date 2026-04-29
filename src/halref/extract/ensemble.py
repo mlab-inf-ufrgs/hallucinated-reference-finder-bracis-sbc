@@ -292,12 +292,18 @@ def _ref_list_quality(refs: list[str]) -> float:
     import re
     if not refs:
         return 0.0
-    year_count = sum(1 for r in refs if re.search(r"\b(?:19|20)\d{2}\b", r))
+    year_count = sum(
+        1
+        for r in refs
+        if re.search(r"\b(?:19|20)\d{2}\b", r)
+        or re.search(r"\((?:19|20)\d{2}\)", r)
+    )
+    numbered = sum(1 for r in refs if re.match(r"^\s*\[\d+\]", r.strip()))
     good_length = sum(1 for r in refs if 40 <= len(r) <= 800)
     # Penalize column-interleaving artifacts: refs where a word runs directly
     # into "In Proceedings" with no space (e.g. "resoIn Proceedings of lution:")
     interleaved = sum(1 for r in refs if re.search(r"[a-z]In\s+(?:Proceedings|Pro\b)", r))
-    return year_count * 2 + good_length - interleaved * 5
+    return year_count * 2 + good_length + numbered * 3 - interleaved * 5
 
 
 def _parse_with_ensemble(raw_text: str, parsers: list[FieldParser]) -> Reference:

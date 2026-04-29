@@ -7,6 +7,7 @@ import re
 from nameparser import HumanName
 
 from halref.extract.base import FieldParser
+from halref.extract.field_parsers.text_after_year import strip_leading_after_year
 from halref.models import Author, Reference
 
 
@@ -52,8 +53,7 @@ class HeuristicFieldParser(FieldParser):
         ref.authors = self._extract_authors(before_year)
 
         # Step 4: Title and venue are after the year
-        after_year = text[year_end:].strip()
-        after_year = after_year.lstrip(". ")
+        after_year = strip_leading_after_year(text[year_end:])
         ref.title, ref.venue = self._extract_title_venue(after_year)
 
         # Step 5: Extract DOI/URL
