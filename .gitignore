@@ -40,3 +40,4 @@ papers/
 # Editor
 *.swp
 *~
+.pytest_cache/

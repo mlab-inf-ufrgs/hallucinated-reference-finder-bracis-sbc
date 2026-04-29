@@ -3,9 +3,8 @@
 from pathlib import Path
 from src.halref.extract.field_parsers.style_detector import StyleDetector
 from src.halref.extract.field_parsers.style_specific_parsers import (
-    ACLFieldParser,
     SBCFieldParser,
-    SPLNCSFieldParser,
+    BRACISFieldParser,
 )
 
 
@@ -33,12 +32,12 @@ def demonstrate_extraction_phase():
     print("\n🔍 Parsing results:")
     print("-" * 70)
 
-    if detected_style.value == "acl":
-        parser = ACLFieldParser()
-    elif detected_style.value == "splncs":
-        parser = SPLNCSFieldParser()
+    if detected_style.value == "sbc":
+        parser = SBCFieldParser()
+    elif detected_style.value == "bracis":
+        parser = BRACISFieldParser()
     else:
-        parser = ACLFieldParser()
+        parser = SBCFieldParser()
 
     for i, ref_text in enumerate(references, 1):
         ref = parser.parse(ref_text)
@@ -95,7 +94,7 @@ Hallucination indicators (all working with any style):
 
 ✗ No match in Crossref/DBLP
   - Reference cannot be found in major databases
-  - Works with ACL, SBC, SPLNCS equally
+  - Works with SBC, BRACIS equally
 
 ✗ Citation count mismatch
   - Cited more/less than actual in system
@@ -128,7 +127,7 @@ INPUT: PDF document with mixed bibliography styles
 
 Step 1: Extract text from PDF
 Step 2: Split into reference strings
-Step 3: Detect bibliography style (ACL/SBC/SPLNCS)
+Step 3: Detect bibliography style (SBC/BRACIS)
 Step 4: Select style-specific parser
 Step 5: Parse references → Extract fields
 

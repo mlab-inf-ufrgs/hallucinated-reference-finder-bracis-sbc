@@ -131,32 +131,26 @@ class NatbibFieldParser(FieldParser):
         return min(score, 1.0)
 
 
-class ACLFieldParser(NatbibFieldParser):
-    """Parser for ACL-format references (natbib with year after authors)."""
-
-    name = "acl"
-
-
 class SBCFieldParser(NatbibFieldParser):
-    """Parser for SBC-format references (similar to ACL natbib format)."""
+    """Parser for SBC-format references (natbib format)."""
 
     name = "sbc"
 
 
-class SPLNCSFieldParser(FieldParser):
-    """Parser for SPLNCS-format references (numbered format).
+class BRACISFieldParser(FieldParser):
+    """Parser for BRACIS-format references (numbered format).
 
     Expected format:
         [N] Last, Initial.: Title. In: Venue (Year): pp. X-Y.
     """
 
-    name = "splncs"
+    name = "bracis"
 
     YEAR_PATTERN = re.compile(r"\((\d{4})\)")
     NUMBERED_PATTERN = re.compile(r"^\s*\[(\d+)\]")
 
     def parse(self, raw_text: str) -> Reference:
-        """Parse a SPLNCS-format reference."""
+        """Parse a BRACIS-format reference."""
         text = raw_text.strip()
         ref = Reference(raw_text=raw_text)
 
@@ -198,7 +192,7 @@ class SPLNCSFieldParser(FieldParser):
         return ref
 
     def _parse_authors(self, author_text: str) -> list[Author]:
-        """Parse SPLNCS authors (Last, Initial, Last, Initial)."""
+        """Parse BRACIS authors (Last, Initial, Last, Initial)."""
         authors = []
         author_text = author_text.strip()
 
@@ -256,7 +250,7 @@ class SPLNCSFieldParser(FieldParser):
         return entries
 
     def parse_confidence(self, ref: Reference) -> float:
-        """Score parse confidence for SPLNCS format."""
+        """Score parse confidence for BRACIS format."""
         score = 0.5
         if ref.year:
             score += 0.2

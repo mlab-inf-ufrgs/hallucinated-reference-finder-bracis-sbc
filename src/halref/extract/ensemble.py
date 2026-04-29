@@ -89,26 +89,23 @@ def get_style_specific_parsers(style: str | None = None) -> list[FieldParser]:
     """Get field parsers specific to a bibliography style.
 
     Args:
-        style: Style name ("acl", "sbc", "splncs") or None for auto-detection.
+        style: Style name ("sbc", "bracis") or None for auto-detection.
 
     Returns:
         List of parsers appropriate for the style.
     """
     from halref.extract.field_parsers.style_specific_parsers import (
-        ACLFieldParser,
         SBCFieldParser,
-        SPLNCSFieldParser,
+        BRACISFieldParser,
     )
 
-    if style == "acl":
-        return [ACLFieldParser()]
-    elif style == "sbc":
+    if style == "sbc":
         return [SBCFieldParser()]
-    elif style == "splncs":
-        return [SPLNCSFieldParser()]
+    elif style == "bracis":
+        return [BRACISFieldParser()]
     else:
         # Return all style-specific parsers for auto-detection
-        return [ACLFieldParser(), SBCFieldParser(), SPLNCSFieldParser()]
+        return [SBCFieldParser(), BRACISFieldParser()]
 
 
 def _detect_reference_style(references: list[str]) -> str:
@@ -118,7 +115,7 @@ def _detect_reference_style(references: list[str]) -> str:
         references: List of reference strings.
 
     Returns:
-        Style name ("acl", "sbc", "splncs") or "unknown".
+        Style name ("sbc", "bracis") or "unknown".
     """
     from halref.extract.field_parsers.style_detector import StyleDetector
 
