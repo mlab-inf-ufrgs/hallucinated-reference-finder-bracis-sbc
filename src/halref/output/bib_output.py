@@ -4,7 +4,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from halref.extract.bib_writer import reference_to_bibtex
+from halref.extract.bib_writer import (
+    reference_for_bib_export,
+    reference_to_bibtex,
+    should_use_canonical_bib_metadata,
+)
 from halref.models import BatchReport, MatchResult
 
 
@@ -54,7 +58,11 @@ def _annotated_entry(result: MatchResult) -> str:
     if strategies:
         lines.append(f"% STRATEGIES: {', '.join(strategies)}")
 
-    bib_entry = reference_to_bibtex(result.reference)
+    if should_use_canonical_bib_metadata(result):
+        lines.append("% BibTeX body: canonical fields from verified API match")
+
+    export_ref = reference_for_bib_export(result)
+    bib_entry = reference_to_bibtex(export_ref)
     if bib_entry:
         lines.append(bib_entry)
 

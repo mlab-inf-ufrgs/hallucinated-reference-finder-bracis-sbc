@@ -22,9 +22,10 @@ class MarkerExtractor(TextExtractor):
         self, pdf_path: Path, page_range: tuple[int, int] | None = None
     ) -> str:
         from marker.converters.pdf import PdfConverter
-        from marker.models import create_model_dict
 
-        models = create_model_dict()
+        from halref.hardware import create_marker_model_dict
+
+        models = create_marker_model_dict()
         converter = PdfConverter(artifact_dict=models)
         rendered = converter(str(pdf_path))
         md = rendered.markdown

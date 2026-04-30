@@ -16,8 +16,9 @@ class ReferenceStyle(Enum):
 class StyleDetector:
     """Detect bibliography style from reference text patterns."""
 
-    # BRACIS: numbered references like [1], [2], etc.
+    # BRACIS / Springer: [1] ... or "1. Author, A.: ..."
     BRACIS_NUMBERED_PATTERN = r"^\s*\[\d+\]"
+    BRACIS_DOT_NUMBERED_PATTERN = r"^\s*\d{1,3}\.\s+[A-Z\u00C0-\u024F]"
 
     # SBC: natbib format with year after authors
     # "Last, First and First Last. YYYY."
@@ -47,6 +48,8 @@ class StyleDetector:
 
             # Check BRACIS (numbered)
             if re.match(StyleDetector.BRACIS_NUMBERED_PATTERN, ref):
+                scores[ReferenceStyle.BRACIS] += 2
+            if re.match(StyleDetector.BRACIS_DOT_NUMBERED_PATTERN, ref):
                 scores[ReferenceStyle.BRACIS] += 2
 
             # Check SBC (natbib-style with year)

@@ -45,6 +45,20 @@ def check(
             help="Write risk_summary.md/csv and reports/detail_<id>.md per article",
         ),
     ] = False,
+    llm_extract: Annotated[
+        bool,
+        typer.Option(
+            "--llm-extract",
+            help="Refine each extracted reference with local LLM (set [llm] model in config)",
+        ),
+    ] = False,
+    llm_batch: Annotated[
+        bool,
+        typer.Option(
+            "--llm-batch",
+            help="One LLM call on full reference section (needs large context; overrides per-ref LLM)",
+        ),
+    ] = False,
 ) -> None:
     """Check PDF(s) for hallucinated references.
 
@@ -72,6 +86,10 @@ def check(
         cfg.llm.base_url = llm_base_url
     if llm_model:
         cfg.llm.model = llm_model
+    if llm_extract:
+        cfg.extraction.llm_parse_refs = True
+    if llm_batch:
+        cfg.extraction.llm_batch_refs = True
 
     # Resolve PDF paths
     pdf_files = _resolve_paths(paths)
@@ -87,11 +105,13 @@ def check(
     console.print()
 
     # Step 1: Extract references from all PDFs
-    from halref.extract.bib_writer import write_bib
+    from halref.extract.bib_writer import write_bib, write_bib_from_match_results
     from halref.pipeline import extract_all, run_check
 
     t_extract = time.time()
-    per_file_refs = extract_all(pdf_files, cfg)
+    extract_result = extract_all(pdf_files, cfg)
+    per_file_refs = extract_result.per_file_refs
+    extraction_seconds = extract_result.extraction_seconds
     total_refs = sum(len(r) for r in per_file_refs.values())
     console.print(
         f"[green]Extraction complete[/green] — "
@@ -113,19 +133,19 @@ def check(
     report = asyncio.run(
         run_check(pdf_files, cfg, threshold=threshold, per_file_refs=per_file_refs)
     )
+    verify_elapsed = time.time() - t_verify
     console.print(
         f"[green]Verification complete[/green] — "
         f"{report.total_flagged} flagged of {report.total_references} "
-        f"({_fmt_elapsed(time.time() - t_verify)})"
+        f"({_fmt_elapsed(verify_elapsed)})"
     )
 
-    # Re-write .bib files after verification (repair may have fixed truncated refs)
+    # Re-write .bib after verification: repair + canonical API fields when confident
     for file_report in report.reports:
-        refs = [r.reference for r in file_report.results]
-        if refs:
+        if file_report.results:
             pdf_name = Path(file_report.input_file).stem
             bib_path = bib_dir / f"{pdf_name}.bib"
-            write_bib(refs, bib_path, quiet=True)
+            write_bib_from_match_results(file_report.results, bib_path, quiet=True)
 
     # Step 4: Output report(s)
     from halref.output.bib_output import write_bib_report
@@ -161,8 +181,50 @@ def check(
     if write_terminal:
         print_terminal_report(report, threshold=threshold, show_ok=show_ok)
 
+    wall_total = time.time() - t_start
+    n_pdf = len(pdf_files)
+    ext_list = list(extraction_seconds.values())
+    ext_sum = sum(ext_list)
+    ext_avg = ext_sum / n_pdf if n_pdf else 0.0
+    amortized_verify = verify_elapsed / n_pdf if n_pdf else 0.0
+    avg_wall_per_pdf = wall_total / n_pdf if n_pdf else 0.0
+
+    timing_path = outdir / "timing_report.md"
+    lines = [
+        "# Tempos de execução (halref check)",
+        "",
+        f"- **PDFs processados:** {n_pdf}",
+        f"- **Tempo total (parede):** {wall_total:.2f} s ({_fmt_elapsed(wall_total)})",
+        f"- **Média de tempo total por PDF** (parede ÷ N): **{avg_wall_per_pdf:.2f} s**",
+        "",
+        "## Extração (local, por ficheiro)",
+        "",
+        "| PDF | Segundos | Referências |",
+        "|-----|----------:|-------------:|",
+    ]
+    for pdf_path in sorted(pdf_files, key=lambda p: p.name):
+        secs = extraction_seconds.get(pdf_path, 0.0)
+        nrefs = len(per_file_refs.get(pdf_path, []))
+        lines.append(f"| `{pdf_path.name}` | {secs:.2f} | {nrefs} |")
+    lines.extend(
+        [
+            "",
+            f"- **Soma extração:** {ext_sum:.2f} s",
+            f"- **Média extração por PDF:** {ext_avg:.2f} s",
+            "",
+            "## Verificação (APIs, lote partilhado)",
+            "",
+            f"- **Tempo total de verificação:** {verify_elapsed:.2f} s ({_fmt_elapsed(verify_elapsed)})",
+            f"- **Cota média por PDF** (verificação ÷ N, só para comparação): {amortized_verify:.2f} s",
+            "",
+            "A verificação corre em lote com deduplicação entre PDFs; o tempo não é independente por ficheiro.",
+        ]
+    )
+    timing_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    console.print(f"Wrote {timing_path.resolve()}", style="dim")
+
     console.print(
-        f"\n[bold]Done[/bold] in {_fmt_elapsed(time.time() - t_start)}"
+        f"\n[bold]Done[/bold] in {_fmt_elapsed(wall_total)}"
     )
 
 
@@ -293,6 +355,20 @@ def extract(
     outdir: Annotated[Path, typer.Option("--outdir", "-d", help="Output directory for .bib files")] = Path("halref_output"),
     config: Annotated[Optional[Path], typer.Option("--config", "-c", help="Config TOML file")] = None,
     ref_pages: Annotated[Optional[str], typer.Option("--ref-pages", help="Reference pages (1-indexed, e.g., '9-13')")] = None,
+    llm_extract: Annotated[
+        bool,
+        typer.Option(
+            "--llm-extract",
+            help="Refine each reference with local LLM ([llm] model in config)",
+        ),
+    ] = False,
+    llm_batch: Annotated[
+        bool,
+        typer.Option(
+            "--llm-batch",
+            help="One LLM call on full reference section (needs large context)",
+        ),
+    ] = False,
 ) -> None:
     """Extract references from PDF(s) and output as BibTeX.
 
@@ -307,6 +383,10 @@ def extract(
     cfg = load_config(str(config) if config else None)
     if ref_pages:
         cfg.extraction.ref_pages = ref_pages
+    if llm_extract:
+        cfg.extraction.llm_parse_refs = True
+    if llm_batch:
+        cfg.extraction.llm_batch_refs = True
 
     pdf_files = _resolve_paths(paths)
     if not pdf_files:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from halref.extract.base import TextExtractor
@@ -22,7 +23,7 @@ class DoclingExtractor(TextExtractor):
     ) -> str:
         from docling.document_converter import DocumentConverter
 
-        converter = DocumentConverter()
+        converter = self._make_converter()
         result = converter.convert(str(pdf_path))
         doc = result.document
 
@@ -35,6 +36,33 @@ class DoclingExtractor(TextExtractor):
             ref_text = self._extract_from_markdown(full_md)
 
         return ref_text or ""
+
+    @staticmethod
+    def _make_converter():
+        """Prefer GPU (CUDA/MPS) when ``DOCLING_DEVICE`` / torch say so; else CPU."""
+        try:
+            from docling.datamodel.accelerator_options import (
+                AcceleratorDevice,
+                AcceleratorOptions,
+            )
+            from docling.document_converter import DocumentConverter
+
+            raw = (os.environ.get("DOCLING_DEVICE") or "").lower()
+            if raw == "cpu":
+                dev = AcceleratorDevice.CPU
+            elif raw == "mps":
+                dev = AcceleratorDevice.MPS
+            elif raw.startswith("cuda"):
+                dev = AcceleratorDevice.CUDA
+            else:
+                dev = AcceleratorDevice.AUTO
+            return DocumentConverter(
+                accelerator_options=AcceleratorOptions(device=dev),
+            )
+        except Exception:
+            from docling.document_converter import DocumentConverter
+
+            return DocumentConverter()
 
     def _find_references_section(self, doc) -> str:
         """Extract references section from Docling's structured document."""

@@ -16,12 +16,28 @@ def split_references(text: str) -> list[str]:
     # Pre-process: dehyphenate words broken across lines
     text = dehyphenate(text)
 
+    # Many BRACIS / Springer templates use "N. Author, A.: Title" instead of "[N]".
+    # Two-column PDFs often glue references without whitespace:
+    #   - "... (2022) 8. NextAuthor"  -> break after closing paren
+    #   - "... pp. 1–2.8. NextAuthor" / "...1281–1288.9. Author" -> break after page range
+    text_for_dot = re.sub(
+        r"\)\s*(\d{1,3}\.\s+[A-Z\u00C0-\u024F])",
+        r")\n\1",
+        text,
+    )
+    text_for_dot = re.sub(
+        r"(\d(?:[\u2013\-])\d+)\.(\d{1,3}\.\s+[A-Z\u00C0-\u024F])",
+        r"\1.\n\2",
+        text_for_dot,
+    )
+
     # Run all strategies and collect results
     strategies = {
         "blank_lines": _split_by_blank_lines(text),
         "author_year": _split_by_author_year_pattern(text),
         "numbers": _split_by_numbers(text),
         "numbered_lines": _split_by_line_leading_brackets(text),
+        "numbered_dot": _split_by_leading_number_dot(text_for_dot),
     }
 
     # Pick the best strategy by quality score
@@ -87,6 +103,10 @@ def _quality_score(refs: list[str]) -> float:
         if re.match(r"^\s*\[\d+\]", ref):
             score += 2.5
 
+        # Springer / BRACIS: "12. Pla, A., ...: Title"
+        if re.match(r"^\s*\d{1,3}\.\s+[A-Z\u00C0-\u024F]", ref):
+            score += 2.5
+
         # Has author-like patterns? (capitalized names with commas/and)
         if re.search(r"[A-Z][a-z]+.*(?:,|and)\s+[A-Z][a-z]+", body):
             author_count += 1
@@ -101,8 +121,8 @@ def _quality_score(refs: list[str]) -> float:
         else:
             score -= 1.0  # Very short = likely a fragment or table cell
 
-        # Penalty: looks like table/list content, not a reference
-        if re.match(r"^\d+\.\s+\w+:", ref):  # "4. Word: ..." pattern
+        # Penalty: table/list row like "4. foo: ..." (lowercase after number), not "4. Author:"
+        if re.match(r"^\d+\.\s+[a-z]", ref):
             score -= 2.0
         if re.match(r"^[•\-\*]\s", ref):  # Bullet points
             score -= 2.0
@@ -209,6 +229,10 @@ def _is_reference_start(line: str) -> bool:
     if re.match(r"^\[\d+\]\s*\S", stripped):
         return True
 
+    # Springer / BRACIS: "7. Dubey, A., ..."
+    if re.match(r"^\d{1,3}\.\s+[A-Z\u00C0-\u024F]", stripped):
+        return True
+
     if not stripped or not stripped[0].isupper():
         return False
 
@@ -264,6 +288,32 @@ def _split_by_numbers(text: str) -> list[str]:
             chunk = re.sub(r"  +", " ", chunk)
             refs.append(chunk.strip())
 
+    return refs
+
+
+def _split_by_leading_number_dot(text: str) -> list[str]:
+    """Split Springer/LNCS/BRACIS ``N. Author, A.: ...`` (line-anchored ``N.``).
+
+    Templates often use ``1. Last, F.:`` instead of ``[1]``. Requires at least two
+    markers to avoid false splits on incidental ``10.``-style tokens mid-line.
+    """
+    pattern = re.compile(
+        r"(?:^|\n)\s*(\d{1,3})\.\s+(?=[A-Z\u00C0-\u024F])",
+        re.MULTILINE,
+    )
+    matches = list(pattern.finditer(text))
+    if len(matches) < 2:
+        return []
+
+    refs: list[str] = []
+    for i, m in enumerate(matches):
+        start = m.start(1)
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
+        chunk = text[start:end].strip()
+        if len(chunk) > 20:
+            chunk = re.sub(r"\n", " ", chunk)
+            chunk = re.sub(r"  +", " ", chunk)
+            refs.append(chunk.strip())
     return refs
 
 

@@ -63,3 +63,30 @@ def test_split_includes_first_bracket_marker() -> None:
     refs = split_references(text)
     assert len(refs) == 2
     assert refs[0].startswith("[1]")
+
+
+def test_split_springer_dot_numbered_refs() -> None:
+    """BRACIS/Springer often uses ``N. Author, A.: Title`` instead of ``[N]``."""
+    text = (
+        "2. Asghari, P., Soleimani, E.: Deploying hierarchical HMMs. "
+        "Journal of X 10(2), 100–110 (2023)\n"
+        "3. Barshan, B., Altun, K.: Human activity recognition. "
+        "Humanized Computing 11(1), 1–20 (2010)\n"
+    )
+    refs = split_references(text)
+    assert len(refs) == 2, f"got {len(refs)}: {refs!r}"
+    assert refs[0].startswith("2.")
+    assert "Asghari" in refs[0]
+    assert refs[1].startswith("3.")
+
+
+def test_split_dot_numbered_glued_after_year_paren() -> None:
+    """Two-column PDF glue: ``... (2022) 8. Next, A.:`` should split."""
+    text = (
+        "7. Dubey, A., Lyons, N.: Short title. In: ICMLA (2022): pp. 1–2."
+        "8. Hesar, H.D., Hesar, A.D.: Adaptive filtering. Biomedical Signal 9(1), 1–5 (2021)"
+    )
+    refs = split_references(text)
+    assert len(refs) == 2, f"got {len(refs)}: {refs!r}"
+    assert refs[0].startswith("7.")
+    assert refs[1].startswith("8.")

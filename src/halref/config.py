@@ -14,6 +14,26 @@ class ExtractionConfig(BaseModel):
     text_extractors: list[str] = Field(default=["pdfminer"])
     field_parsers: list[str] = Field(default=["regex", "heuristic"])
     ref_pages: str = ""
+    prefer_gpu: bool = Field(
+        default=True,
+        description="Prefer CUDA/MPS for optional marker/docling extractors when torch is available",
+    )
+    llm_parse_refs: bool = Field(
+        default=False,
+        description="After rule-based parsers, call local LLM per reference (needs [llm] model)",
+    )
+    llm_batch_refs: bool = Field(
+        default=False,
+        description="Single LLM call on the whole reference-section text (needs large context window)",
+    )
+    drop_fragment_refs_after_parse: bool = Field(
+        default=False,
+        description=(
+            "If true, drop split lines that look like venue/page-only fragments after parsing. "
+            "If false (default), keep every split entry so APIs can score all references "
+            "(better for hallucination audits; may retain occasional junk lines)."
+        ),
+    )
 
     def page_range(self) -> tuple[int, int] | None:
         """Parse ref_pages string (1-indexed) into 0-indexed tuple."""
@@ -58,6 +78,12 @@ class LLMConfig(BaseModel):
     base_url: str = "http://localhost:8000/v1"
     model: str = ""
     api_key: str = ""
+    extract_max_tokens: int = Field(
+        default=8192,
+        ge=512,
+        le=128000,
+        description="Max completion tokens for LLM extraction (per-ref or batch)",
+    )
 
 
 class Config(BaseSettings):

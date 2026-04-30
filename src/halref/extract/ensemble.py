@@ -68,6 +68,7 @@ def get_field_parsers(config: Config) -> list[FieldParser]:
                     base_url=config.llm.base_url,
                     model=config.llm.model,
                     api_key=config.llm.api_key,
+                    max_tokens=min(int(config.llm.extract_max_tokens), 16384),
                 )
                 if parser.is_available():
                     parsers.append(parser)
@@ -81,6 +82,23 @@ def get_field_parsers(config: Config) -> list[FieldParser]:
         from halref.extract.field_parsers.regex_parser import RegexFieldParser
         from halref.extract.field_parsers.heuristic_parser import HeuristicFieldParser
         parsers = [RegexFieldParser(), HeuristicFieldParser()]
+
+    has_llm = any(getattr(p, "name", None) == "llm" for p in parsers)
+    if (
+        config.extraction.llm_parse_refs
+        and (config.llm.model or "").strip()
+        and not has_llm
+    ):
+        from halref.extract.field_parsers.llm_parser import LLMFieldParser
+
+        parser = LLMFieldParser(
+            base_url=config.llm.base_url,
+            model=config.llm.model,
+            api_key=config.llm.api_key,
+            max_tokens=min(int(config.llm.extract_max_tokens), 16384),
+        )
+        if parser.is_available():
+            parsers.append(parser)
 
     return parsers
 
@@ -104,8 +122,9 @@ def get_style_specific_parsers(style: str | None = None) -> list[FieldParser]:
     elif style == "bracis":
         return [BRACISFieldParser()]
     else:
-        # Return all style-specific parsers for auto-detection
-        return [SBCFieldParser(), BRACISFieldParser()]
+        # BRACIS/Springer numbered refs must run before SBC — otherwise Natbib can
+        # "win" at equal confidence using a year digit from inside a DOI slug.
+        return [BRACISFieldParser(), SBCFieldParser()]
 
 
 def _detect_reference_style(references: list[str]) -> str:
@@ -129,6 +148,9 @@ def extract_references(pdf_path: Path, config: Config) -> list[Reference]:
     Returns:
         List of Reference objects with fields populated.
     """
+    from halref.hardware import ensure_inference_device_env
+
+    ensure_inference_device_env(prefer_gpu=config.extraction.prefer_gpu)
     page_range = config.extraction.page_range()
     extractors = get_text_extractors(config)
     parsers = get_field_parsers(config)
@@ -190,6 +212,41 @@ def extract_references(pdf_path: Path, config: Config) -> list[Reference]:
     ref_strings = all_ref_strings[best_extractor]
     logger.info(f"Using {best_extractor} extraction ({len(ref_strings)} references)")
 
+    # Optional: one LLM call on the full reference-section text (bypasses per-line split issues)
+    if config.extraction.llm_batch_refs and (config.llm.model or "").strip():
+        try:
+            from halref.extract.llm_batch_refs import references_via_llm_batch
+            from halref.extract.ref_section import slice_reference_body
+            from halref.extract.text_extractors.pdfminer_extractor import PdfminerExtractor
+
+            raw_pdf = PdfminerExtractor().extract_text(pdf_path, page_range=page_range)
+            body = slice_reference_body(raw_pdf)
+            batch_refs = references_via_llm_batch(body, config)
+            if batch_refs and len(batch_refs) >= 3:
+                references = []
+                filtered_count = 0
+                for i, ref in enumerate(batch_refs):
+                    ref.source_index = i + 1
+                    if ref.extraction_confidence < 0.3:
+                        filtered_count += 1
+                        continue
+                    if config.extraction.drop_fragment_refs_after_parse and _is_false_positive(ref):
+                        filtered_count += 1
+                        continue
+                    references.append(ref)
+                if references:
+                    if filtered_count:
+                        logger.info(
+                            "LLM batch extraction: %d references (%d filtered)",
+                            len(references),
+                            filtered_count,
+                        )
+                    else:
+                        logger.info("LLM batch extraction: %d references", len(references))
+                    return references
+        except Exception as exc:
+            logger.warning("LLM batch extraction failed, falling back to rule-based: %s", exc)
+
     # Detect bibliography style from reference strings
     detected_style = _detect_reference_style(ref_strings)
     logger.info(f"Detected bibliography style: {detected_style}")
@@ -202,7 +259,11 @@ def extract_references(pdf_path: Path, config: Config) -> list[Reference]:
     references = []
     filtered_count = 0
     for i, raw_text in enumerate(ref_strings):
-        ref = _parse_with_ensemble(raw_text, all_parsers)
+        ref = _parse_with_ensemble(
+            raw_text,
+            all_parsers,
+            use_llm_refinement=config.extraction.llm_parse_refs,
+        )
         ref.source_index = i + 1
 
         # Filter out low-confidence non-references
@@ -211,8 +272,8 @@ def extract_references(pdf_path: Path, config: Config) -> list[Reference]:
             logger.debug(f"Filtered low-confidence ref [{i+1}]: {raw_text[:80]}...")
             continue
 
-        # Filter out false positives: venue/page fragments parsed as references
-        if _is_false_positive(ref):
+        # Optional: drop lines that look like venue-only fragments (legacy behaviour)
+        if config.extraction.drop_fragment_refs_after_parse and _is_false_positive(ref):
             filtered_count += 1
             logger.debug(f"Filtered false positive [{i+1}]: {raw_text[:80]}...")
             continue
@@ -298,7 +359,12 @@ def _ref_list_quality(refs: list[str]) -> float:
         if re.search(r"\b(?:19|20)\d{2}\b", r)
         or re.search(r"\((?:19|20)\d{2}\)", r)
     )
-    numbered = sum(1 for r in refs if re.match(r"^\s*\[\d+\]", r.strip()))
+    numbered = sum(
+        1
+        for r in refs
+        if re.match(r"^\s*\[\d+\]", r.strip())
+        or re.match(r"^\s*\d{1,3}\.\s+[A-Z\u00C0-\u024F]", r.strip())
+    )
     good_length = sum(1 for r in refs if 40 <= len(r) <= 800)
     # Penalize column-interleaving artifacts: refs where a word runs directly
     # into "In Proceedings" with no space (e.g. "resoIn Proceedings of lution:")
@@ -306,30 +372,57 @@ def _ref_list_quality(refs: list[str]) -> float:
     return year_count * 2 + good_length + numbered * 3 - interleaved * 5
 
 
-def _parse_with_ensemble(raw_text: str, parsers: list[FieldParser]) -> Reference:
-    """Parse a single reference string using multiple parsers, pick best result."""
-    candidates: list[Reference] = []
+def _llm_refinement_usable(ref: Reference) -> bool:
+    """True if LLM output is worth using instead of rule-based parse."""
+    t = (ref.title or "").strip()
+    if len(t) < 12:
+        return False
+    if ref.extraction_confidence < 0.45:
+        return False
+    return bool(ref.authors or ref.year)
 
-    for parser in parsers:
+
+def _parse_with_ensemble(
+    raw_text: str,
+    parsers: list[FieldParser],
+    *,
+    use_llm_refinement: bool = False,
+) -> Reference:
+    """Parse a single reference string using multiple parsers, pick best result."""
+    traditional = [p for p in parsers if getattr(p, "name", None) != "llm"]
+    llm_parsers = [p for p in parsers if getattr(p, "name", None) == "llm"]
+
+    candidates: list[Reference] = []
+    for parser in traditional:
         try:
             ref = parser.parse(raw_text)
             ref.extraction_confidence = parser.parse_confidence(ref)
             candidates.append(ref)
-
-            if ref.extraction_confidence >= 0.9:
+            if ref.extraction_confidence >= 0.9 and not use_llm_refinement:
                 return ref
         except Exception as e:
             logger.debug(f"{parser.name} parser failed: {e}")
 
     if not candidates:
-        return Reference(raw_text=raw_text, extraction_confidence=0.0)
+        best_trad = Reference(raw_text=raw_text, extraction_confidence=0.0)
+    else:
+        best_trad = max(candidates, key=lambda r: r.extraction_confidence)
+        if best_trad.extraction_confidence < 0.7 and len(candidates) > 1 and not use_llm_refinement:
+            best_trad = _merge_candidates(candidates, raw_text)
 
-    best = max(candidates, key=lambda r: r.extraction_confidence)
+    if use_llm_refinement and llm_parsers:
+        for lp in llm_parsers:
+            try:
+                ref_llm = lp.parse(raw_text)
+                ref_llm.raw_text = raw_text
+                ref_llm.extraction_confidence = lp.parse_confidence(ref_llm)
+                if _llm_refinement_usable(ref_llm):
+                    return ref_llm
+            except Exception as e:
+                logger.debug("%s parser failed: %s", lp.name, e)
+        return best_trad
 
-    if best.extraction_confidence < 0.7 and len(candidates) > 1:
-        best = _merge_candidates(candidates, raw_text)
-
-    return best
+    return best_trad
 
 
 def _merge_candidates(candidates: list[Reference], raw_text: str) -> Reference:

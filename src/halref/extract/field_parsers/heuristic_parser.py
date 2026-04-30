@@ -8,6 +8,7 @@ from nameparser import HumanName
 
 from halref.extract.base import FieldParser
 from halref.extract.field_parsers.text_after_year import strip_leading_after_year
+from halref.extract.field_parsers.year_context import pick_publication_year_match
 from halref.models import Author, Reference
 
 
@@ -22,26 +23,22 @@ class HeuristicFieldParser(FieldParser):
 
     def parse(self, raw_text: str) -> Reference:
         text = raw_text.strip()
-        # Strip leading [N] reference numbers
-        text = re.sub(r"^\[\d+\]\s*", "", text)
+        # Strip leading [N] or Springer ``N.`` reference numbers
+        text = re.sub(r"^\s*\[\d+\]\s*", "", text)
+        text = re.sub(r"^\s*\d{1,3}\.\s+", "", text)
         # Dehyphenate and normalize whitespace
         text = re.sub(r"(\w)-\s+(\w)", r"\1\2", text)
         text = re.sub(r"\s+", " ", text)
         ref = Reference(raw_text=raw_text)
 
-        # Step 1: Find all 4-digit year candidates, excluding those in arXiv IDs/URLs
-        year_matches = [
-            m for m in re.finditer(r"\b((?:19|20)\d{2})[a-z]?\b", text)
-            if not self._is_year_in_identifier(text, m)
-        ]
-        if not year_matches:
+        # Prefer (YYYY); exclude years inside DOI / IEEE-style ``/ACCESS.2025.`` slugs
+        year_match = pick_publication_year_match(text)
+        if year_match and self._is_year_in_identifier(text, year_match):
+            year_match = None
+        if not year_match:
             # No year found — try basic period-splitting
             return self._parse_no_year(text, ref)
 
-        # Step 2: Pick the most likely year position
-        # In ACL format, year comes early (after authors). Pick the first one
-        # that's followed by a period or within the first half of the string.
-        year_match = self._pick_best_year(year_matches, text)
         ref.year = int(year_match.group(1))
         year_pos = year_match.start()
         year_end = year_match.end()

@@ -8,6 +8,7 @@ from nameparser import HumanName
 
 from halref.extract.base import FieldParser
 from halref.extract.field_parsers.text_after_year import strip_leading_after_year
+from halref.extract.field_parsers.year_context import pick_publication_year_match
 from halref.models import Author, Reference
 
 
@@ -39,13 +40,14 @@ class NatbibFieldParser(FieldParser):
         """Parse a natbib-style reference."""
         text = raw_text.strip()
 
-        # Strip leading [N] reference numbers
+        # Strip leading [N] or Springer ``N.`` reference numbers
         text = re.sub(r"^\s*\[\d+\]\s*", "", text)
+        text = re.sub(r"^\s*\d{1,3}\.\s+", "", text)
 
         ref = Reference(raw_text=raw_text)
 
-        # Extract year
-        year_match = self.YEAR_PATTERN.search(text)
+        # Prefer (YYYY); never treat a year inside ``/JOURNAL.2025.`` DOI slugs as publication year
+        year_match = pick_publication_year_match(text)
         if year_match:
             ref.year = int(year_match.group(1))
 
@@ -187,25 +189,35 @@ class BRACISFieldParser(FieldParser):
 
     YEAR_PATTERN = re.compile(r"\((\d{4})\)")
     NUMBERED_PATTERN = re.compile(r"^\s*\[(\d+)\]")
+    NUMBERED_DOT_PATTERN = re.compile(r"^\s*(\d{1,3})\.\s+")
+    DOI_PATTERN = re.compile(r"\b(10\.\d{4,}/[^\s]+)")
+    # Final segment ends with ", YYYY" or " ... YYYY" (book chapters, Springer)
+    _TAIL_PUBLICATION_YEAR = re.compile(r"(?:,\s*|\s+)((?:19|20)\d{2})\s*\.?\s*$")
 
     def parse(self, raw_text: str) -> Reference:
         """Parse a BRACIS-format reference."""
         text = raw_text.strip()
+        text = re.sub(r"[\x0c\x00-\x08]", " ", text)
+        text = re.sub(r"\s+", " ", text).strip()
         ref = Reference(raw_text=raw_text)
 
-        # Extract reference number
+        # Extract reference number: [N] or Springer/LNCS "N. Author..."
         num_match = self.NUMBERED_PATTERN.match(text)
         if num_match:
             ref.reference_number = int(num_match.group(1))
             text = text[num_match.end():].strip()
-
-        # Extract year from (YYYY)
-        year_match = self.YEAR_PATTERN.search(text)
-        if year_match:
-            ref.year = int(year_match.group(1))
+        else:
+            dot_match = self.NUMBERED_DOT_PATTERN.match(text)
+            if dot_match:
+                ref.reference_number = int(dot_match.group(1))
+                text = text[dot_match.end():].strip()
 
         # Split by "In:" to get title and venue
         if "In:" in text:
+            # Publication year in venue: (YYYY)
+            year_matches = list(self.YEAR_PATTERN.finditer(text))
+            if year_matches:
+                ref.year = int(year_matches[-1].group(1))
             title_part, venue_part = text.split("In:", 1)
             ref.title = title_part.strip()
             # Remove authors from title (before first colon)
@@ -222,11 +234,38 @@ class BRACISFieldParser(FieldParser):
             if venue_match:
                 ref.venue = venue_match.group(1).strip()
         else:
-            # If no "In:", try to extract title and authors
-            if ":" in text:
-                author_part, rest = text.split(":", 1)
-                ref.authors = self._parse_authors(author_part)
-                ref.title = rest.strip()
+            journal = self._try_dot_separated_journal_article(text)
+            if journal is not None:
+                ref.authors = self._parse_authors(journal["authors_line"])
+                ref.title = journal["title"]
+                ref.venue = journal["venue"]
+                ref.year = journal["year"]
+            elif ":" in text:
+                # Legacy: "Initials: Title" — avoid first ':' when it is volume:pages
+                colon_idx = self._first_title_colon_index(text)
+                if colon_idx is not None:
+                    author_part, rest = text[:colon_idx], text[colon_idx + 1 :]
+                    ref.authors = self._parse_authors(author_part)
+                    ref.title = rest.strip()
+                else:
+                    author_part, rest = text.split(":", 1)
+                    ref.authors = self._parse_authors(author_part)
+                    ref.title = rest.strip()
+
+        doi_m = self.DOI_PATTERN.search(raw_text) or self.DOI_PATTERN.search(text)
+        if doi_m:
+            ref.doi = doi_m.group(1).rstrip(".")
+        url_m = re.search(r"(https?://(?:doi\.org/)?[^\s]+)", raw_text)
+        if url_m:
+            ref.url = url_m.group(1).rstrip(".")
+
+        if ref.title:
+            # Drop trailing DOI / URL glued after the title sentence
+            ref.title = re.split(
+                r"\.\s*(?:https?://|\bDOI:?\s*https?://)",
+                ref.title,
+                maxsplit=1,
+            )[0].rstrip(". ")
 
         return ref
 
@@ -235,8 +274,9 @@ class BRACISFieldParser(FieldParser):
         authors = []
         author_text = author_text.strip()
 
-        # Remove leading [N] if present
+        # Remove leading [N] or "N. " if present
         author_text = re.sub(r"^\s*\[\d+\]\s*", "", author_text)
+        author_text = re.sub(r"^\s*\d{1,3}\.\s+", "", author_text)
 
         # Split by commas
         entries = self._split_author_entries(author_text)
@@ -288,13 +328,74 @@ class BRACISFieldParser(FieldParser):
 
         return entries
 
+    def _try_dot_separated_journal_article(self, text: str) -> dict[str, str | int] | None:
+        """Parse ``Authors. Title. Journal, vol:pages, year.`` (no ``In:`` label).
+
+        Springer-style numbered references often use commas and ``vol:pages`` instead
+        of ``In: Venue (year)``. A naive ``split(':', 1)`` would cut inside ``553:83``.
+        """
+        t = text.rstrip()
+        if not t.endswith("."):
+            t = f"{t}."
+        # Do not break on initials like "B. C." (single capital before the dot)
+        parts = re.split(r"(?<![A-Z])\.\s+", t)
+        parts = [p.strip() for p in parts if p.strip()]
+        while len(parts) >= 2 and not self._TAIL_PUBLICATION_YEAR.search(parts[-1]):
+            if len(parts) < 3:
+                return None
+            parts.pop()
+        if len(parts) < 3:
+            return None
+        venue_line = parts[-1]
+        ym = self._TAIL_PUBLICATION_YEAR.search(venue_line)
+        if not ym:
+            return None
+        year = int(ym.group(1))
+        tail_venue = venue_line[: ym.start()].rstrip().strip().rstrip(",")
+        if not tail_venue or len(tail_venue) < 2:
+            return None
+        authors_line = parts[0]
+        if len(authors_line) < 3:
+            return None
+        inner = parts[1:-1]
+        if not inner:
+            return None
+        title = inner[0].strip()
+        if not title or len(title) < 6:
+            return None
+        if len(inner) == 1:
+            venue = tail_venue
+        else:
+            venue = ". ".join(inner[1:] + [tail_venue]).strip()
+        return {
+            "authors_line": authors_line,
+            "title": title,
+            "venue": venue,
+            "year": year,
+        }
+
+    @staticmethod
+    def _first_title_colon_index(text: str) -> int | None:
+        """Index of ':' that starts the title, skipping ``volume:pages`` colons."""
+        for m in re.finditer(":", text):
+            i = m.start()
+            window = text[max(0, i - 14) : i + 2]
+            if re.search(r"\d(?:\(\d+\))?\s*:\s*\d", window):
+                continue
+            if re.search(r"\d+\s*:\s*\d", window):
+                continue
+            return i
+        return None
+
     def parse_confidence(self, ref: Reference) -> float:
         """Score parse confidence for BRACIS format."""
-        score = 0.5
+        score = 0.45
         if ref.year:
             score += 0.2
         if ref.reference_number:
             score += 0.15
         if ref.authors:
+            score += 0.15
+        if ref.title and len(ref.title.strip()) > 18:
             score += 0.15
         return min(score, 1.0)

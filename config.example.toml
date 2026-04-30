@@ -5,6 +5,12 @@ text_extractors = ["pdfplumber"]
 field_parsers = ["regex", "heuristic"]
 # Reference pages (1-indexed, e.g., "9-13"). Empty = auto-detect via "References" heading
 ref_pages = ""
+# Use CUDA/MPS for optional marker/docling extractors when PyTorch sees a GPU (no effect on pdfminer)
+prefer_gpu = true
+# Local LLM (OpenAI-compatible: Ollama, LM Studio, vLLM) to improve BibTeX fields — needs: pip install -e ".[llm]"
+# llm_parse_refs = false   # per reference after rule-based parsers
+# llm_batch_refs = false   # one call on whole "References" section (needs large context window)
+# drop_fragment_refs_after_parse = false   # false = keep every split line for API scoring (recommended for hallucination checks)
 
 [apis.semantic_scholar]
 api_key = ""                # or set SEMANTIC_SCHOLAR_API_KEY env var
@@ -44,3 +50,4 @@ enabled = false
 base_url = "http://localhost:8000/v1"   # vLLM/Ollama endpoint
 model = ""
 api_key = ""
+# extract_max_tokens = 8192   # completion budget for --llm-extract / --llm-batch

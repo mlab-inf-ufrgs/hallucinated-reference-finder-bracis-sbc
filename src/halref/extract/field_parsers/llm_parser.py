@@ -11,7 +11,11 @@ from halref.models import Author, Reference
 logger = logging.getLogger(__name__)
 
 
-SYSTEM_PROMPT = """You are a citation parser. Given a raw reference string from an academic paper, extract the structured fields. Return ONLY valid JSON with these fields:
+SYSTEM_PROMPT = """You are a citation parser. Given ONE raw reference string from an academic bibliography (ACL, SBC, Springer/LNCS, BRACIS), extract structured fields.
+
+The string may start with "[N] " or "N. " (reference number) followed by authors like "Last, F., Last2, G.: Title. Journal ... (YYYY). https://doi.org/..."
+
+Return ONLY valid JSON with these fields:
 
 {
   "title": "string",
@@ -19,17 +23,19 @@ SYSTEM_PROMPT = """You are a citation parser. Given a raw reference string from 
   "year": integer or null,
   "venue": "string",
   "doi": "string",
-  "pages": "string"
+  "pages": "string",
+  "url": "string"
 }
 
 Rules:
-- Parse author names into first and last name components
+- Parse author names into first and last name components (e.g. "Pitombeira-Neto, A.R." → last Pitombeira-Neto, first A.R.)
 - For "et al.", include only the named authors
-- Year should be a 4-digit integer or null
-- Venue is the journal/conference name without "In" or "Proceedings of" prefix
-- If a field is not present, use empty string or null for year
-- Preserve Unicode characters exactly as written — do not transliterate diacritics (e.g., keep "Schütze" not "Schutze", "Søgaard" not "Sogaard")
-- Return ONLY the JSON object, no additional text"""
+- Year: use the publication year in parentheses at the end of the entry (e.g. (2025)), NOT a year that appears only inside a DOI path like /ACCESS.2025./
+- Venue is the journal or conference name; omit "In:" prefix if present
+- doi: bare id like 10.xxxx/... ; url: full https DOI link if present
+- If a field is not present, use "" or null for year
+- Preserve Unicode exactly — do not strip diacritics
+- Return ONLY the JSON object, no markdown fences, no extra text"""
 
 
 class LLMFieldParser(FieldParser):
@@ -37,10 +43,18 @@ class LLMFieldParser(FieldParser):
 
     name = "llm"
 
-    def __init__(self, base_url: str, model: str, api_key: str = ""):
+    def __init__(
+        self,
+        base_url: str,
+        model: str,
+        api_key: str = "",
+        *,
+        max_tokens: int = 4096,
+    ):
         self.base_url = base_url.rstrip("/")
         self.model = model
         self.api_key = api_key
+        self.max_tokens = max(512, int(max_tokens))
 
     def is_available(self) -> bool:
         try:
@@ -65,7 +79,7 @@ class LLMFieldParser(FieldParser):
                     {"role": "user", "content": raw_text},
                 ],
                 temperature=0.0,
-                max_tokens=1024,
+                max_tokens=self.max_tokens,
             )
 
             content = response.choices[0].message.content or ""
@@ -116,6 +130,7 @@ class LLMFieldParser(FieldParser):
                     full=f"{first} {last}".strip(),
                 ))
 
+        url = str(data.get("url", "") or "").strip()
         ref = Reference(
             raw_text=raw_text,
             title=data.get("title", ""),
@@ -124,6 +139,19 @@ class LLMFieldParser(FieldParser):
             venue=data.get("venue", ""),
             doi=data.get("doi", ""),
             pages=data.get("pages", ""),
+            url=url,
         )
         ref.extraction_confidence = self.parse_confidence(ref)
         return ref
+
+    def parse_confidence(self, ref: Reference) -> float:  # type: ignore[override]
+        if not (ref.title or "").strip() or len(ref.title.strip()) < 10:
+            return 0.0
+        score = 0.55
+        if ref.year and 1900 <= ref.year <= 2100:
+            score += 0.2
+        if ref.authors:
+            score += 0.2
+        if len(ref.title) > 28:
+            score += 0.1
+        return min(1.0, score)

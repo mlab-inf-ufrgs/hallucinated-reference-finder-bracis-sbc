@@ -1,0 +1,44 @@
+[extraction]
+# pdfminer handles two-column academic PDFs better than pdfplumber for reference blocks
+text_extractors = ["pdfminer"]
+field_parsers = ["regex", "heuristic"]
+ref_pages = ""
+prefer_gpu = true
+
+[apis.semantic_scholar]
+api_key = ""
+enabled = false
+
+[apis.crossref]
+enabled = true
+mailto = ""
+
+[apis.dblp]
+enabled = false
+
+[apis.openalex]
+api_key = ""
+enabled = true
+
+[apis.acl_anthology]
+enabled = false
+
+[matching]
+title_threshold = 0.85
+author_threshold = 0.6
+[matching.weights]
+title = 0.30
+authors = 0.25
+author_order = 0.15
+year = 0.15
+consensus = 0.15
+
+[agent]
+enable_retry = true
+max_retries = 2
+
+[llm]
+enabled = false
+base_url = "http://localhost:8000/v1"
+model = ""
+api_key = ""

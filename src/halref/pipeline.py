@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import NamedTuple
 
 from rich.console import Console
 from rich.progress import (
@@ -33,6 +35,13 @@ DEDUP_SIMILARITY_THRESHOLD = 0.92
 WELL_KNOWN_SEARCH_THRESHOLD = 3
 
 
+class ExtractAllResult(NamedTuple):
+    """References per PDF plus wall time spent on extraction for each file."""
+
+    per_file_refs: dict[Path, list[Reference]]
+    extraction_seconds: dict[Path, float]
+
+
 @dataclass
 class DeduplicatedRef:
     """A unique reference that may appear in multiple papers."""
@@ -46,7 +55,7 @@ class DeduplicatedRef:
 def extract_all(
     pdf_files: list[Path],
     config: Config,
-) -> dict[Path, list[Reference]]:
+) -> ExtractAllResult:
     """Extract references from all PDFs (no verification).
 
     Call this first to get references, write .bib files, then pass
@@ -55,6 +64,7 @@ def extract_all(
     from halref.extract.ensemble import extract_references
 
     per_file_refs: dict[Path, list[Reference]] = {}
+    extraction_seconds: dict[Path, float] = {}
     with Progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
@@ -66,11 +76,13 @@ def extract_all(
         task = progress.add_task("Extracting references...", total=len(pdf_files))
         for pdf_path in pdf_files:
             progress.update(task, description=f"Extracting {pdf_path.name}...")
+            t0 = time.perf_counter()
             refs = extract_references(pdf_path, config)
+            extraction_seconds[pdf_path] = time.perf_counter() - t0
             per_file_refs[pdf_path] = refs
             progress.advance(task)
 
-    return per_file_refs
+    return ExtractAllResult(per_file_refs, extraction_seconds)
 
 
 async def run_check(
@@ -98,7 +110,7 @@ async def run_check(
 
     # Step 1: Extract (or use pre-extracted)
     if per_file_refs is None:
-        per_file_refs = extract_all(pdf_files, config)
+        per_file_refs = extract_all(pdf_files, config).per_file_refs
 
     if len(pdf_files) == 1:
         pdf_path = pdf_files[0]
