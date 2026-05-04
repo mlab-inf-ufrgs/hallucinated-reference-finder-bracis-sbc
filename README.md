@@ -1,6 +1,6 @@
 # halref — Hallucinated Reference Finder (adaptação para BRACIS e anais da SBC)
 
-Fork do projeto [**hallucinated-reference-finder**](https://github.com/davidjurgens/hallucinated-reference-finder) (David Jurgens) focado em **PDFs de artigos** com bibliografia no estilo **SBC** (Sociedade Brasileira de Computação) e **BRACIS** (formato numerado tipo LNCS/Springer, usado nas submissões da conferência BRACIS).
+Fork do projeto [**hallucinated-reference-finder**](https://github.com/davidjurgens/hallucinated-reference-finder) (David Jurgens) adaptado para **PDFs de artigos** com bibliografia no estilo **SBC** (Sociedade Brasileira de Computação) e **BRACIS** (formato numerado tipo LNCS/Springer, usado nas submissões da conferência BRACIS).
 
 O objetivo é **extrair referências** do PDF (local), **consultar bases académicas** (metadados apenas), **atribuir um score de risco** de alucinação ou inconsistência face ao que existe nas APIs e **gerar saídas** (JSON, BibTeX, relatórios) para o **revisor** priorizar verificação manual das entradas com maior score.
 
