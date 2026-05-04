@@ -9,8 +9,42 @@ from halref.matching.author_matcher import (
     check_first_author,
 )
 from halref.matching.metadata_matcher import doi_matches, year_difference, year_matches
-from halref.matching.title_matcher import title_similarity
+from halref.matching.title_matcher import title_similarity, title_similarity_conservative
 from halref.models import APIMatch, HallucinationSignal, MatchResult, Reference
+
+
+def _agrees_with_best(best: APIMatch, m: APIMatch) -> bool:
+    """True if API hit ``m`` is the same work as ``best`` (cross-source corroboration)."""
+    if m is best:
+        return True
+    bd = (best.doi or "").strip().lower().rstrip(".")
+    md = (m.doi or "").strip().lower().rstrip(".")
+    if bd and md and bd == md:
+        return True
+    # Same title wording across APIs (lenient: metadata strings differ slightly)
+    return title_similarity(best.title, m.title) >= 0.88
+
+
+def corroborating_match_count(
+    reference: Reference,
+    api_matches: list[APIMatch],
+    best_match: APIMatch | None,
+) -> int:
+    """How many raw API rows both match the PDF title (strict) and the same work as ``best_match``.
+
+    Previously we counted any hit with fuzzy title >0.7 vs the PDF, so several
+    *different* wrong papers each counted as a "strong" match and wiped out the
+    consensus penalty. This counts only corroborating sources.
+    """
+    if not best_match or not api_matches:
+        return 0
+    n = 0
+    for m in api_matches:
+        if title_similarity_conservative(reference.title or "", m.title or "") <= 0.7:
+            continue
+        if _agrees_with_best(best_match, m):
+            n += 1
+    return n
 
 
 def score_reference(
@@ -40,7 +74,7 @@ def score_reference(
         ]
         return result
 
-    # Find best match by title similarity
+    # Find best match by conservative title similarity (stricter than max-of-three)
     best_match, best_title_sim = _select_best_match(reference, api_matches)
     result.best_match = best_match
     result.title_similarity = best_title_sim
@@ -60,13 +94,25 @@ def score_reference(
         description=desc,
     ))
 
+    first_ok = check_first_author(reference.authors, best_match.authors)
+
     # Signal 2: Author mismatch
     author_overlap_score = author_set_overlap(reference.authors, best_match.authors)
     result.author_overlap = author_overlap_score
     author_mismatch = max(0.0, 1.0 - author_overlap_score)
+    # First author is decisive: do not let incidental last-name overlap elsewhere
+    # wash out a wrong first author (common with invented refs + API noise).
+    if (
+        not first_ok
+        and reference.authors
+        and best_match.authors
+    ):
+        author_mismatch = max(author_mismatch, 0.52)
     desc = f"Author overlap: {author_overlap_score:.0%}"
     if author_overlap_score < 0.5 and reference.authors and best_match.authors:
         desc = f"Authors differ significantly (overlap: {author_overlap_score:.0%})"
+    if not first_ok and reference.authors and best_match.authors:
+        desc = f"{desc}; first author does not match (strict)"
     signals.append(HallucinationSignal(
         name="author_mismatch",
         value=author_mismatch,
@@ -76,7 +122,6 @@ def score_reference(
 
     # Signal 3: Author order wrong
     order_ok = check_author_order(reference.authors, best_match.authors)
-    first_ok = check_first_author(reference.authors, best_match.authors)
     result.author_order_correct = order_ok
     result.first_author_match = first_ok
     order_value = 0.0
@@ -112,10 +157,11 @@ def score_reference(
         description=year_desc,
     ))
 
-    # Signal 5: API consensus (how many APIs found it)
-    high_conf_matches = len([m for m in api_matches if _match_quality(reference, m) > 0.7])
+    # Signal 5: API consensus — only hits that match the PDF (strict title) AND
+    # the same underlying work as best_match (not N unrelated "digital transformation" papers)
+    high_conf_matches = corroborating_match_count(reference, api_matches, best_match)
     consensus_penalty = max(0.0, 1.0 - high_conf_matches / 3.0)
-    desc = f"Found in {high_conf_matches} database(s)"
+    desc = f"Found in {high_conf_matches} database(s) (corroborating same work as best match)"
     signals.append(HallucinationSignal(
         name="low_api_consensus",
         value=consensus_penalty,
@@ -148,12 +194,12 @@ def score_reference(
 def _select_best_match(
     reference: Reference, matches: list[APIMatch]
 ) -> tuple[APIMatch, float]:
-    """Select the best matching API result by title similarity."""
+    """Select the best API row by conservative title similarity vs the PDF."""
     best_match = matches[0]
     best_sim = 0.0
 
     for match in matches:
-        sim = title_similarity(reference.title, match.title)
+        sim = title_similarity_conservative(reference.title, match.title)
         if sim > best_sim:
             best_sim = sim
             best_match = match
@@ -162,5 +208,5 @@ def _select_best_match(
 
 
 def _match_quality(reference: Reference, match: APIMatch) -> float:
-    """Quick quality estimate for a match."""
-    return title_similarity(reference.title, match.title)
+    """Quick quality estimate for a match (strict title vs PDF)."""
+    return title_similarity_conservative(reference.title, match.title)

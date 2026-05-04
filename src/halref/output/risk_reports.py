@@ -8,7 +8,7 @@ from collections import Counter
 from pathlib import Path
 
 from halref.config import MatchingWeights
-from halref.matching.title_matcher import title_similarity
+from halref.matching.scorer import corroborating_match_count
 from halref.models import BatchReport, MatchResult, VerificationReport
 
 # Hallucination score → risk band (same bands as the upstream README / UI).
@@ -41,11 +41,11 @@ def _safe_filename_fragment(article_id: str) -> str:
 
 
 def _high_conf_match_count(result: MatchResult) -> int:
-    ref = result.reference
-    return sum(
-        1
-        for m in result.api_matches
-        if title_similarity(ref.title or "", m.title or "") > 0.7
+    """Aligned with scorer: corroborating sources for the same work as best_match."""
+    return corroborating_match_count(
+        result.reference,
+        result.api_matches,
+        result.best_match,
     )
 
 
@@ -79,7 +79,7 @@ def _consensus_summary(result: MatchResult) -> str:
     n = _high_conf_match_count(result)
     apis = len(result.api_matches)
     s = _signal(result, "low_api_consensus")
-    base = f"{n} strong API match(es) (title >70%) / {apis} raw match(es)"
+    base = f"{n} corroborating source(s) (strict title + same work as best) / {apis} raw match(es)"
     if s and s.description:
         return f"{base}; {s.description}"
     return base

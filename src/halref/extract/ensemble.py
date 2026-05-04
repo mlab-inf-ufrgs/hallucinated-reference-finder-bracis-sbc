@@ -8,6 +8,7 @@ from pathlib import Path
 from halref.config import Config
 from halref.extract.base import FieldParser, TextExtractor
 from halref.extract.splitter import split_references
+from halref.extract.title_cleanup import truncate_title_at_journal_boundary
 from halref.models import Reference
 
 logger = logging.getLogger(__name__)
@@ -227,6 +228,10 @@ def extract_references(pdf_path: Path, config: Config) -> list[Reference]:
                 filtered_count = 0
                 for i, ref in enumerate(batch_refs):
                     ref.source_index = i + 1
+                    if ref.title:
+                        c = truncate_title_at_journal_boundary(ref.title)
+                        if c:
+                            ref.title = c
                     if ref.extraction_confidence < 0.3:
                         filtered_count += 1
                         continue
@@ -265,6 +270,11 @@ def extract_references(pdf_path: Path, config: Config) -> list[Reference]:
             use_llm_refinement=config.extraction.llm_parse_refs,
         )
         ref.source_index = i + 1
+
+        if ref.title:
+            cleaned = truncate_title_at_journal_boundary(ref.title)
+            if cleaned:
+                ref.title = cleaned
 
         # Filter out low-confidence non-references
         if ref.extraction_confidence < 0.3:
@@ -431,7 +441,11 @@ def _merge_candidates(candidates: list[Reference], raw_text: str) -> Reference:
 
     titles = [(c.title, c.extraction_confidence) for c in candidates if c.title]
     if titles:
-        merged.title = max(titles, key=lambda t: (t[1], len(t[0])))[0]
+        # Prefer the shortest plausible title among near-tie confidences — avoids
+        # picking "Title. Journal name…" over "Title." when parsers disagree.
+        best_conf = max(t[1] for t in titles)
+        pool = [t for t in titles if t[1] >= best_conf - 0.1]
+        merged.title = min(pool, key=lambda t: len(t[0]))[0]
 
     author_candidates = [(c.authors, c.extraction_confidence) for c in candidates if c.authors]
     if author_candidates:

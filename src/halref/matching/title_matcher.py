@@ -49,3 +49,29 @@ def title_similarity(title_a: str, title_b: str) -> float:
     ]
 
     return max(scores)
+
+
+def title_similarity_conservative(title_a: str, title_b: str) -> float:
+    """Stricter title similarity for hallucination scoring.
+
+    ``title_similarity`` returns the *maximum* of ratio, token_sort, and
+    token_set, which is appropriate for fuzzy repair but can **overestimate**
+    when two different papers share topical tokens (e.g. both contain
+    "digital transformation"). This function returns the **minimum** of
+    the three scores so that disagreement on any axis lowers the match.
+    """
+    a = normalize_title(title_a)
+    b = normalize_title(title_b)
+
+    if not a or not b:
+        return 0.0
+
+    if a == b:
+        return 1.0
+
+    scores = [
+        fuzz.token_sort_ratio(a, b) / 100.0,
+        fuzz.token_set_ratio(a, b) / 100.0,
+        fuzz.ratio(a, b) / 100.0,
+    ]
+    return min(scores)

@@ -8,6 +8,12 @@ from rapidfuzz import fuzz
 
 from halref.models import Author
 
+# Stricter than legacy 0.85: reduces false "same author" on fuzzy last names.
+OVERLAP_LAST_NAME_THRESHOLD = 0.90
+FIRST_AUTHOR_LAST_THRESHOLD = 0.93
+# When both sides have a usable full/initial string, require modest agreement.
+FIRST_AUTHOR_FULL_MIN_RATIO = 0.72
+
 
 def normalize_name(name: str) -> str:
     """Normalize an author name for comparison."""
@@ -51,7 +57,7 @@ def author_set_overlap(authors_a: list[Author], authors_b: list[Author]) -> floa
     matches = 0
     for la in lasts_a:
         for i, lb in enumerate(lasts_b):
-            if i not in matched_b and last_names_match(la, lb):
+            if i not in matched_b and last_names_match(la, lb, OVERLAP_LAST_NAME_THRESHOLD):
                 matches += 1
                 matched_b.add(i)
                 break
@@ -82,7 +88,7 @@ def check_author_order(authors_a: list[Author], authors_b: list[Author]) -> bool
     used_b = set()
     for i, la in enumerate(lasts_a):
         for j, lb in enumerate(lasts_b):
-            if j not in used_b and last_names_match(la, lb):
+            if j not in used_b and last_names_match(la, lb, OVERLAP_LAST_NAME_THRESHOLD):
                 pairs.append((i, j))
                 used_b.add(j)
                 break
@@ -95,8 +101,33 @@ def check_author_order(authors_a: list[Author], authors_b: list[Author]) -> bool
     return all(b_indices[i] < b_indices[i + 1] for i in range(len(b_indices) - 1))
 
 
+def _first_author_display_string(author: Author) -> str:
+    if (author.full or "").strip():
+        return author.full.strip()
+    return f"{author.first} {author.last}".strip()
+
+
+def first_author_display_similar(a: Author, b: Author, min_ratio: float = FIRST_AUTHOR_FULL_MIN_RATIO) -> bool:
+    """Conservative check on the whole first-author string when both are non-trivial."""
+    sa = _first_author_display_string(a)
+    sb = _first_author_display_string(b)
+    if len(sa) < 5 or len(sb) < 5:
+        return True
+    ra = normalize_name(sa)
+    rb = normalize_name(sb)
+    if not ra or not rb:
+        return True
+    # token_sort tolerates order swaps; min with ratio catches unrelated names sharing a surname token
+    ts = fuzz.token_sort_ratio(ra, rb) / 100.0
+    r = fuzz.ratio(ra, rb) / 100.0
+    return min(ts, r) >= min_ratio
+
+
 def check_first_author(authors_a: list[Author], authors_b: list[Author]) -> bool:
-    """Check if the first authors match."""
+    """Check if the first authors match (stricter last name + whole-string check when available)."""
     if not authors_a or not authors_b:
         return True
-    return last_names_match(authors_a[0].last, authors_b[0].last)
+    fa, fb = authors_a[0], authors_b[0]
+    if not last_names_match(fa.last, fb.last, FIRST_AUTHOR_LAST_THRESHOLD):
+        return False
+    return first_author_display_similar(fa, fb)
