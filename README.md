@@ -1,11 +1,20 @@
-# halref — Hallucinated Reference Finder (adaptação BRACIS / SBC)
+# halref — Hallucinated Reference Finder (adaptação para BRACIS e anais da SBC)
 
 Fork do projeto [**hallucinated-reference-finder**](https://github.com/davidjurgens/hallucinated-reference-finder) (David Jurgens) focado em **PDFs de artigos** com bibliografia no estilo **SBC** (Sociedade Brasileira de Computação) e **BRACIS** (formato numerado tipo LNCS/Springer, usado nas submissões da conferência BRACIS).
 
 O objetivo é **extrair referências** do PDF (local), **consultar bases académicas** (metadados apenas), **atribuir um score de risco** de alucinação ou inconsistência face ao que existe nas APIs e **gerar saídas** (JSON, BibTeX, relatórios) para o **revisor** priorizar verificação manual das entradas com maior score.
 
----
+----
 
+### Aviso legal e limitação de uso
+
+**Disclaimer:** os autores e mantenedores deste fork **não assumem qualquer responsabilidade** pelo uso da ferramenta, pelas suas saídas nem por decisões tomadas com base nos relatórios ou scores. Os resultados dependem de extração de PDF, heurísticas, limitações das APIs públicas e de dados bibliográficos que podem estar incompletos ou desatualizados.
+
+Esta ferramenta **não** deve ser utilizada, por si só, para **aceitar ou rejeitar** submissões científicas, nem como prova ou acusação de que um artigo contém «referências alucinadas» ou conduta inadequada. Os scores são **indicadores heurísticos** sujeitos a falsos positivos e falsos negativos.
+
+Utilize o **halref** apenas como **apoio à revisão e à filtragem manual**: priorizar entradas a verificar, cruzar com fontes primárias. Confirme sempre os resultados com verificação manual e análise crítica humana, bem como as políticas da sua conferência, instituição ou revisão por pares.
+
+---
 ## Alterações deste fork (changelog)
 
 ### Extração e estilos
@@ -236,3 +245,10 @@ diagnose_extraction.py  # Diagnóstico opcional só de extração
 
 **MIT**, em linha com o projeto original:  
 https://github.com/davidjurgens/hallucinated-reference-finder
+
+---
+
+## Créditos
+- **Implementação e adaptação**: Renan Andrades e Mateus Balda, do INF-UFRGS, foram responsáveis pela adaptação do código ao contexto dos proceedings do BRACIS e de eventos da SBC, e pelas implementações envolvidas no processo.
+- **Supervisão**: Profa. Dra. Mariana Recamonde Mendoza (INF-UFRGS) supervisionou o trabalho, orientou quanto ao uso e às decisões metodológicas, esclareceu dúvidas e contribuiu na definição das soluções.
+- **Agradecimento** à Profa. Dra. Viviane Moreira (INF-UFRGS), pela indicação da solução original que embasou este projeto. 
