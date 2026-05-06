@@ -410,7 +410,12 @@ def run_extract(pdf_files: list[Path], config: Config) -> list[Reference]:
 
 
 def _create_api_clients(config: Config) -> list:
-    """Create API clients based on config."""
+    """Create API clients based on config.
+
+    Verification waterfall order: Semantic Scholar → OpenAlex → Crossref → DBLP
+    (then ACL Anthology when enabled). Earlier APIs can short-circuit later ones
+    on confident title matches.
+    """
     from halref.apis.crossref import CrossRefClient
     from halref.apis.dblp import DBLPClient
     from halref.apis.openalex import OpenAlexClient
@@ -430,6 +435,16 @@ def _create_api_clients(config: Config) -> list:
                 "  Set via: SEMANTIC_SCHOLAR_API_KEY env var or apis.semantic_scholar.api_key in config"
             )
 
+    api_cfg = config.get_api_config("openalex")
+    if api_cfg.enabled:
+        clients.append(OpenAlexClient(api_key=api_cfg.api_key))
+        if not api_cfg.api_key:
+            missing_keys.append(
+                "[bold]OpenAlex[/bold]: No API key set (required since Feb 2026).\n"
+                "  Get a free key at: https://openalex.org/settings/api-key\n"
+                "  Set via: OPENALEX_API_KEY env var or apis.openalex.api_key in config"
+            )
+
     api_cfg = config.get_api_config("crossref")
     if api_cfg.enabled:
         clients.append(CrossRefClient(mailto=api_cfg.mailto))
@@ -443,16 +458,6 @@ def _create_api_clients(config: Config) -> list:
     api_cfg = config.get_api_config("dblp")
     if api_cfg.enabled:
         clients.append(DBLPClient())
-
-    api_cfg = config.get_api_config("openalex")
-    if api_cfg.enabled:
-        clients.append(OpenAlexClient(api_key=api_cfg.api_key))
-        if not api_cfg.api_key:
-            missing_keys.append(
-                "[bold]OpenAlex[/bold]: No API key set (required since Feb 2026).\n"
-                "  Get a free key at: https://openalex.org/settings/api-key\n"
-                "  Set via: OPENALEX_API_KEY env var or apis.openalex.api_key in config"
-            )
 
     # ACL Anthology is last (local, slower to load)
     api_cfg = config.get_api_config("acl_anthology")

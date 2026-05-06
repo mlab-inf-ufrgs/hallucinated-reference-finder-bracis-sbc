@@ -7,11 +7,11 @@ prefer_gpu = true
 
 [apis.semantic_scholar]
 api_key = ""
-enabled = false
+enabled = true
 
 [apis.crossref]
 enabled = true
-mailto = ""
+mailto = "rsandrades@inf.ufrgs.br"
 
 [apis.dblp]
 enabled = false
